@@ -1,0 +1,29 @@
+# ==============================================================================
+# BACKUP MODULE - TRAEFIK SERVICES
+# ==============================================================================
+# Description: Load balancer service configurations for the Kopia web UI
+# Author: Matt Barham
+# Created: 2026-04-28
+# Modified: 2026-04-28
+# Version: 1.0.0
+# Host: Your Server
+# ==============================================================================
+# Type: Traefik Dynamic Config (services)
+# Component: module: backup
+# Deployed by Spoke as: mod_backup_services_backup.yml
+# Dependencies:
+#   - Container services must be running and accessible
+#   - Docker networks: troxy (defined in compose files)
+# ==============================================================================
+
+http:
+  services:
+    #======================================================
+    #====================== KOPIA UI =====================
+    #======================================================
+
+    kopia-svc:
+      loadBalancer:
+        servers:
+          - url: http://kopia:51515
+        passHostHeader: true
