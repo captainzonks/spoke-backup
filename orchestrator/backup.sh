@@ -20,18 +20,27 @@
 set -uo pipefail
 IFS=$'\n\t'
 
+# Cron-spawned shells inherit no env; export the repo password from secret
+# every invocation so kopia subcommands can unlock the encrypted metadata.
+if [[ -s /run/secrets/kopia_repo_password ]]; then
+    export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
+fi
+
 readonly LOG_PREFIX="[backup]"
-readonly RUN_LOG="$(mktemp /tmp/backup-run.XXXXXX.log)"
+# Use $$ + epoch for uniqueness; busybox mktemp rejects suffixed templates.
+readonly RUN_LOG="/tmp/backup-run.$$.$(date -u +%s).log"
+: > "$RUN_LOG"
 trap 'rm -f "$RUN_LOG"' EXIT
 
 readonly SOURCES=(
     /sources/secrets
     /sources/shared-env
-    /sources/modules.yml
     /sources/appdata
     /sources/immich
     /sources/staging
 )
+# modules.yml is a single file — kopia snapshots only directories, so we
+# copy it into the staging dir at run time and let /sources/staging carry it.
 
 log() {
     local line
@@ -49,6 +58,12 @@ err() {
 
 run_snapshot() {
     log "starting snapshot run"
+
+    if [[ -f /sources/modules.yml ]]; then
+        log "staging modules.yml for inclusion in /sources/staging snapshot"
+        cp /sources/modules.yml /staging/modules.yml || \
+            err "failed to copy modules.yml to staging (non-fatal)"
+    fi
 
     log "stage 1/3: postgres dumps"
     if /usr/local/bin/pg_dump_all.sh 2>&1 | tee -a "$RUN_LOG"; then

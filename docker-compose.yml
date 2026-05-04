@@ -105,11 +105,12 @@ services:
       - no-new-privileges=true
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_READ_SEARCH
     user: "0:0"
 
     environment:
       - TZ=${TZ}
-      - KOPIA_PASSWORD_FILE=/run/secrets/kopia_repo_password
       - KOPIA_CHECK_FOR_UPDATES=false
       - KOPIA_CONFIG_PATH=/app/config/repository.config
       - KOPIA_REPO_BUCKET=${KOPIA_REPO_BUCKET}
@@ -125,6 +126,7 @@ services:
           echo "[kopia-init] repository.config exists, skipping init"
           exit 0
         fi
+        export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
         echo "[kopia-init] creating B2 repository ${KOPIA_REPO_BUCKET} prefix=${KOPIA_REPO_PREFIX}"
         kopia repository create b2 \
           --bucket="${KOPIA_REPO_BUCKET}" \
@@ -161,22 +163,27 @@ services:
     cpus: 2.0
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_READ_SEARCH
     user: 0:0
 
-    command:
-      - server
-      - start
-      - --insecure
-      - --address=0.0.0.0:51515
-      - --server-username=${KOPIA_SERVER_USERNAME}
-      - --server-control-username=${KOPIA_SERVER_USERNAME}
-      - --server-password-file=/run/secrets/kopia_server_password
-      - --server-control-password-file=/run/secrets/kopia_server_password
-      - --metrics-listen-addr=0.0.0.0:51516
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
+        export KOPIA_SERVER_PASSWORD="$(cat /run/secrets/kopia_server_password)"
+        export KOPIA_SERVER_CONTROL_PASSWORD="$(cat /run/secrets/kopia_server_password)"
+        exec kopia server start \
+          --insecure \
+          --address=0.0.0.0:51515 \
+          --server-username="${KOPIA_SERVER_USERNAME}" \
+          --server-control-username="${KOPIA_SERVER_USERNAME}" \
+          --metrics-listen-addr=0.0.0.0:51516
 
     environment:
       - TZ=${TZ}
-      - KOPIA_PASSWORD_FILE=/run/secrets/kopia_repo_password
+      - KOPIA_SERVER_USERNAME=${KOPIA_SERVER_USERNAME}
       - KOPIA_CHECK_FOR_UPDATES=false
       - KOPIA_LOG_DIR=/app/logs
       - KOPIA_CACHE_DIRECTORY=/app/cache
@@ -209,7 +216,7 @@ services:
         ipv4_address: ${KOPIA_IP}
 
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider --user=${KOPIA_SERVER_USERNAME} --password=$$(cat /run/secrets/kopia_server_password) http://127.0.0.1:51515/api/v1/repo/status || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/51515' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -240,6 +247,16 @@ services:
     cpus: 1.0
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+      - DAC_OVERRIDE
+      # busybox crond invokes initgroups()/setuid()/setgid() to drop to the
+      # job owner before exec; cap_drop ALL strips these and crond fails with
+      # "initgroups failed: root Operation not permitted". Restore the two
+      # caps crond needs even when running every job as root.
+      - SETUID
+      - SETGID
+    user: "0:0"
 
     environment:
       - TZ=${TZ}
@@ -261,10 +278,26 @@ services:
       - BACKUP_NOTIFY_FROM=${BACKUP_NOTIFY_FROM}
       - BACKUP_NOTIFY_ON=${BACKUP_NOTIFY_ON}
       - MAIL_RELAY_URL=${MAIL_RELAY_URL}
+      - KOPIA_CHECK_FOR_UPDATES=false
+      - KOPIA_CONFIG_PATH=/app/config/repository.config
+      - KOPIA_LOG_DIR=/app/logs
+      - KOPIA_CACHE_DIRECTORY=/app/cache
 
     volumes:
       - ${LOCALTIME}:/etc/localtime:ro
       - ${BACKUP_STAGING_DIR}:/staging:rw
+      - kopia_config:/app/config
+      - kopia_cache:/app/cache
+      - kopia_logs:/app/logs
+      # Read-only source mounts mirror the kopia container so the orchestrator
+      # can run `kopia snapshot create` against the same paths without going
+      # through the server API (kopia 0.22+ session-cookie auth makes that
+      # impractical from a cron sidecar).
+      - ${SPOKE_DIR}/secrets:/sources/secrets:ro
+      - ${SPOKE_DIR}/shared/env:/sources/shared-env:ro
+      - ${SPOKE_DIR}/modules.yml:/sources/modules.yml:ro
+      - ${SPOKE_DIR}/appdata:/sources/appdata:ro
+      - ${IMMICH_UPLOAD_DIR}:/sources/immich:ro
 
     tmpfs:
       - /tmp:rw,size=50m

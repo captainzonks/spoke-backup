@@ -19,6 +19,11 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Defensive: ensure KOPIA_PASSWORD set when invoked outside entrypoint context.
+if [[ -z "${KOPIA_PASSWORD:-}" && -s /run/secrets/kopia_repo_password ]]; then
+    export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
+fi
+
 readonly LOG_PREFIX="[policies]"
 
 log() {

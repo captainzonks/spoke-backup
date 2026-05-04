@@ -29,7 +29,20 @@ readonly STATUS="${1:-unknown}"
 readonly LOG_FILE="${2:-}"
 
 readonly BODY_MAX_BYTES=64000
+readonly BODY_MAX_LINES=200
 readonly HOSTNAME_VAL="$(hostname -s 2>/dev/null || echo rome)"
+
+# Strip kopia per-blob progress/spinner/B2 debug noise. Keep:
+#   - orchestrator log lines (ISO timestamp + [component] prefix)
+#   - "Created snapshot" markers from kopia
+#   - any line containing ERROR
+filter_log() {
+    awk '
+        /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z \[/ { print; next }
+        /Created snapshot/                         { print; next }
+        /ERROR/                                    { print; next }
+    '
+}
 
 log() {
     printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$LOG_PREFIX" "$*"
@@ -80,7 +93,11 @@ main() {
 
     local body
     if [[ -n "$LOG_FILE" && -s "$LOG_FILE" ]]; then
-        body="$(tail -c "$BODY_MAX_BYTES" "$LOG_FILE")"
+        # Filter kopia noise, then cap line count and byte budget.
+        body="$(filter_log < "$LOG_FILE" | tail -n "$BODY_MAX_LINES" | tail -c "$BODY_MAX_BYTES")"
+        if [[ -z "$body" ]]; then
+            body="(log produced no notable lines after filtering)"
+        fi
     else
         body="(no log content available)"
     fi
@@ -92,11 +109,11 @@ main() {
 
     local payload
     payload="$(jq -n \
-        --arg to      "$BACKUP_NOTIFY_TO" \
-        --arg from    "$BACKUP_NOTIFY_FROM" \
-        --arg subject "$subject" \
-        --arg body    "$body" \
-        '{to: $to, from: $from, subject: $subject, body: $body}')"
+        --arg to        "$BACKUP_NOTIFY_TO" \
+        --arg from      "$BACKUP_NOTIFY_FROM" \
+        --arg subject   "$subject" \
+        --arg body_text "$body" \
+        '{to: $to, from: $from, subject: $subject, body_text: $body_text}')"
 
     if curl -sf -X POST "$MAIL_RELAY_URL" \
         -H 'Content-Type: application/json' \

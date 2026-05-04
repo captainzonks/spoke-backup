@@ -11,9 +11,10 @@
 # Host: Your Server
 # ==============================================================================
 
-TZ=__TZ__
-SHELL=/bin/bash
-PATH=/usr/local/bin:/usr/bin:/bin
+# NOTE: dcron (Alpine BusyBox cron) does not accept TZ=/SHELL=/PATH= directive
+# lines like vixie-cron does. Set those via container env in docker-compose.yml.
+# TZ is honored via /etc/localtime mount + TZ env var on container.
+# Cron commands MUST use absolute paths since PATH cannot be set here.
 
 # Daily Postgres dumps (logical pg_dump for each registered database)
 0 __BACKUP_PG_DUMP_HOUR__ * * * /usr/local/bin/pg_dump_all.sh >> /var/log/backup-pgdump.log 2>&1

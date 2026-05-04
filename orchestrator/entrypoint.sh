@@ -74,14 +74,18 @@ main() {
     log "rendered crontab:"
     sed 's/^/    /' /etc/crontabs/root
 
+    # TCP-probe wait — kopia 0.22+ enforces session cookies on /api/v1/* so
+    # basic-auth curl probes flood the kopia log with "missing or invalid
+    # session cookie". Port-listening is sufficient liveness signal; the
+    # subsequent `kopia repository connect server` performs cookie-aware login.
     log "waiting for kopia server at ${KOPIA_API_URL}"
-    local server_pw
-    server_pw="$(cat /run/secrets/kopia_server_password)"
+    local host port
+    host="$(printf '%s' "${KOPIA_API_URL#*://}" | cut -d: -f1 | cut -d/ -f1)"
+    port="$(printf '%s' "${KOPIA_API_URL#*://}" | cut -d: -f2 | cut -d/ -f1)"
     local i
     for i in $(seq 1 60); do
-        if curl -sf -u "${KOPIA_SERVER_USERNAME}:${server_pw}" \
-             "${KOPIA_API_URL}/api/v1/repo/status" > /dev/null 2>&1; then
-            log "kopia server reachable"
+        if bash -c "exec 3<>/dev/tcp/${host}/${port}" 2>/dev/null; then
+            log "kopia server reachable on ${host}:${port}"
             break
         fi
         if [[ "$i" -eq 60 ]]; then
@@ -91,15 +95,15 @@ main() {
         sleep 2
     done
 
-    log "registering as kopia client (override-hostname=rome, override-username=orchestrator)"
-    kopia repository disconnect 2>/dev/null || true
-    kopia repository connect server \
-        --url="${KOPIA_API_URL}" \
-        --server-username="${KOPIA_SERVER_USERNAME}" \
-        --server-password-file=/run/secrets/kopia_server_password \
-        --override-hostname=rome \
-        --override-username=orchestrator
-    log "kopia client connected"
+    # Orchestrator shares the kopia_config volume with the kopia server.
+    # KOPIA_PASSWORD must be set so kopia CLI can unlock the repo metadata.
+    export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
+    log "kopia repository status (smoke test against shared config)"
+    if ! kopia repository status 2>&1 | sed 's/^/    /'; then
+        err "kopia repository status FAILED — repository.config missing or password mismatch"
+        exit 1
+    fi
+    log "kopia repository OK"
 
     log "applying per-source policies"
     /usr/local/bin/policies.sh
