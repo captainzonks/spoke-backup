@@ -243,8 +243,12 @@ services:
 
     security_opt:
       - no-new-privileges=true
-    mem_limit: 256M
-    cpus: 1.0
+    # Orchestrator runs `kopia snapshot create` locally (hashing buffers +
+    # parallel B2 uploads), not via API — needs same memory class as the
+    # kopia server. 256M was sized for the API-trigger model; OOM-killer
+    # killed mid-snapshot under that limit on multi-GB sources.
+    mem_limit: 4G
+    cpus: 2.0
     cap_drop:
       - ALL
     cap_add:

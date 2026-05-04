@@ -37,7 +37,7 @@ readonly SOURCES=(
     /sources/shared-env
     /sources/appdata
     /sources/immich
-    /sources/staging
+    /staging
 )
 # modules.yml is a single file — kopia snapshots only directories, so we
 # copy it into the staging dir at run time and let /sources/staging carry it.

@@ -37,7 +37,7 @@ readonly HOSTNAME_VAL="$(hostname -s 2>/dev/null || echo rome)"
 #   - "Created snapshot" markers from kopia
 #   - any line containing ERROR
 filter_log() {
-    awk '
+    tr '\r' '\n' | awk '
         /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z \[/ { print; next }
         /Created snapshot/                         { print; next }
         /ERROR/                                    { print; next }
