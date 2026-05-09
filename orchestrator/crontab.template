@@ -1,0 +1,26 @@
+# ==============================================================================
+# BACKUP ORCHESTRATOR - CRONTAB TEMPLATE
+# ==============================================================================
+# Description: cron schedule template; placeholders substituted at container
+#              entrypoint by sed using BACKUP_PG_DUMP_HOUR, BACKUP_SNAPSHOT_HOUR,
+#              BACKUP_VERIFY_DAY, TZ environment variables.
+# Author: Matt Barham
+# Created: 2026-04-29
+# Modified: 2026-04-29
+# Version: 1.0.0
+# Host: Your Server
+# ==============================================================================
+
+# NOTE: dcron (Alpine BusyBox cron) does not accept TZ=/SHELL=/PATH= directive
+# lines like vixie-cron does. Set those via container env in docker-compose.yml.
+# TZ is honored via /etc/localtime mount + TZ env var on container.
+# Cron commands MUST use absolute paths since PATH cannot be set here.
+
+# Daily Postgres dumps (logical pg_dump for each registered database)
+0 __BACKUP_PG_DUMP_HOUR__ * * * /usr/local/bin/pg_dump_all.sh >> /var/log/backup-pgdump.log 2>&1
+
+# Daily Kopia snapshot run (must be scheduled AFTER pg_dump completes)
+0 __BACKUP_SNAPSHOT_HOUR__ * * * /usr/local/bin/backup.sh --snapshot >> /var/log/backup-run.log 2>&1
+
+# Weekly repository verification (10 percent of files randomly read-back)
+0 5 * * __BACKUP_VERIFY_DAY__ /usr/local/bin/backup.sh --verify >> /var/log/backup-verify.log 2>&1

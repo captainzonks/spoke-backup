@@ -1,0 +1,94 @@
+# ==============================================================================
+# BACKUP MODULE - STACK MANIFEST
+# ==============================================================================
+# Description: Spoke module manifest for Kopia + orchestrator backup service
+# Author: Matt Barham
+# Created: 2026-04-28
+# Modified: 2026-05-06
+# Version: 1.1.0
+# Host: Your Server
+# ==============================================================================
+# Type: Spoke Module Manifest
+# Component: module: backup
+# ==============================================================================
+
+name: backup
+version: "1.1.0"
+description: "Encrypted, deduplicated backups via Kopia to Backblaze B2 with Postgres dumps and email notifications"
+
+requires:
+  networks:
+    - name: troxy
+      required: true
+    - name: db_backup
+      required: true
+  hub_services:
+    - traefik
+    - authentik
+    - postgres-hub
+
+env:
+  hub:
+    - TZ
+    - DOMAIN
+    - SPOKE_DIR
+    - SECRETS_DIR
+    - APPDATA_DIR
+    - PUID
+    - DGID
+    - LOCALTIME
+  module:
+    - KOPIA_IMAGE
+    - BACKUP_ORCHESTRATOR_IMAGE
+    - KOPIA_IP
+    - BACKUP_ORCHESTRATOR_IP
+    - KOPIA_SUBDOMAIN
+    - KOPIA_SERVER_USERNAME
+    - KOPIA_REPO_BUCKET
+    - KOPIA_REPO_ENDPOINT
+    - KOPIA_REPO_REGION
+    - KOPIA_REPO_PREFIX
+    - BACKUP_STAGING_DIR
+    - BACKUP_RETENTION_DAILY
+    - BACKUP_RETENTION_WEEKLY
+    - BACKUP_RETENTION_MONTHLY
+    - BACKUP_RETENTION_YEARLY
+    - BACKUP_PG_DUMP_HOUR
+    - BACKUP_SNAPSHOT_HOUR
+    - BACKUP_VERIFY_DAY
+    - BACKUP_NOTIFY_TO
+    - BACKUP_NOTIFY_FROM
+    - BACKUP_NOTIFY_ON
+    - MAIL_RELAY_URL
+    - BACKUP_PG_CLUSTERS
+    - BACKUP_EXTRA_SOURCES
+
+secrets:
+  - name: kopia_repo_password
+    path: backup/kopia_repo_password
+    required: true
+    description: "Kopia repository encryption password (CRITICAL: losing this = backups unrecoverable)"
+  - name: kopia_server_password
+    path: backup/kopia_server_password
+    required: true
+    description: "Kopia server API authentication password (orchestrator -> kopia API)"
+  - name: b2_account_id
+    path: backup/b2_account_id
+    required: true
+    description: "Backblaze B2 application key ID"
+  - name: b2_account_key
+    path: backup/b2_account_key
+    required: true
+    description: "Backblaze B2 application key"
+  # One secret per cluster listed in BACKUP_PG_CLUSTERS, named
+  # postgres_<name>_backup_password. Add additional clusters via
+  # docker-compose.override.yml in your deployment.
+  - name: postgres_hub_backup_password
+    path: backup/postgres_hub_backup_password
+    required: true
+    description: "Read-only role on postgres-hub for orchestrator pg_dump"
+
+health:
+  service: kopia
+  path: /api/v1/repo/status
+  port: 51515

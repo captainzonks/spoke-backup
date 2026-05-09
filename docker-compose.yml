@@ -1,0 +1,323 @@
+# ==============================================================================
+# BACKUP MODULE - DOCKER COMPOSE
+# ==============================================================================
+# Description: Encrypted, deduplicated backups via Kopia to Backblaze B2 with
+#              Postgres dumps and email notifications
+# Author: Matt Barham
+# Created: 2026-04-28
+# Modified: 2026-05-06
+# Version: 1.1.0
+# Host: Your Server
+# ==============================================================================
+# Component: module: backup
+# Config Sources: base.env + .env.example + modules.yml overrides -> .env (generated)
+# Security: cap_drop ALL, no-new-privileges, secrets via /run/secrets/, ro source mounts
+# ==============================================================================
+# Container Images:
+#   See modules/backup/.env.example for complete image paths and versions
+#   (KOPIA_IMAGE, BACKUP_ORCHESTRATOR_IMAGE)
+# Documentation:
+#   - Kopia: https://kopia.io/docs/
+#   - Backblaze B2 S3-compatible API: https://www.backblaze.com/docs/cloud-storage-s3-compatible-api
+# Networks:
+#   - troxy (192.168.35.0/24) - main application network (Traefik UI, mail-relay)
+#   - db_backup (192.168.34.0/24) - DB backplane for Postgres pg_dump access
+# Dependencies:
+#   - Hub: traefik (routing), authentik (forward-auth), postgres-hub (dump)
+#   - Module: mail-relay (notifications)
+#   - Optional: any postgres-hosting module connected to db_backup network
+# External Integrations:
+#   - [x] Traefik routing (forward-auth via authentik@file)
+#   - [x] Mail-relay HTTP -> protonmail-bridge SMTP
+#   - [x] Backblaze B2 S3-compatible cloud storage
+# ==============================================================================
+# Notes:
+#   - Kopia runs as root to read all appdata (including root-owned Postgres dirs).
+#     Mitigations: cap_drop ALL, no-new-privileges, read-only source mounts,
+#     network-isolated, secrets via /run/secrets/.
+#   - Orchestrator triggers Kopia snapshots via API and runs Postgres dumps via cron.
+#   - First-time repository init runs from orchestrator (see docs/restore.md).
+# ==============================================================================
+
+name: spoke-backup
+
+############################ EXTENSIONS
+
+x-logging-small: &log_small
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+############################ NETWORKS
+
+networks:
+  troxy:
+    external: true
+  db_backup:
+    external: true
+
+############################# VOLUMES
+
+volumes:
+  kopia_config:
+    driver: local
+  kopia_cache:
+    driver: local
+  kopia_logs:
+    driver: local
+
+############################# SECRETS
+
+secrets:
+  kopia_repo_password:
+    file: ${SECRETS_DIR}/backup/kopia_repo_password
+  kopia_server_password:
+    file: ${SECRETS_DIR}/backup/kopia_server_password
+  b2_account_id:
+    file: ${SECRETS_DIR}/backup/b2_account_id
+  b2_account_key:
+    file: ${SECRETS_DIR}/backup/b2_account_key
+  # One secret per Postgres cluster listed in BACKUP_PG_CLUSTERS.
+  # Naming convention: postgres_<name>_backup_password
+  # Add additional clusters via docker-compose.override.yml.
+  postgres_hub_backup_password:
+    file: ${SECRETS_DIR}/backup/postgres_hub_backup_password
+
+############################# SERVICES
+
+services:
+  #======================================
+  # KOPIA_INIT - One-shot: connect or create the B2 repository on first deploy
+  #======================================
+  kopia-init:
+    <<: *log_small
+    image: ${KOPIA_IMAGE}
+    container_name: kopia-init
+    restart: "no"
+    init: true
+
+    security_opt:
+      - no-new-privileges=true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    user: "0:0"
+
+    environment:
+      - TZ=${TZ}
+      - KOPIA_CHECK_FOR_UPDATES=false
+      - KOPIA_CONFIG_PATH=/app/config/repository.config
+      - KOPIA_REPO_BUCKET=${KOPIA_REPO_BUCKET}
+      - KOPIA_REPO_ENDPOINT=${KOPIA_REPO_ENDPOINT}
+      - KOPIA_REPO_REGION=${KOPIA_REPO_REGION}
+      - KOPIA_REPO_PREFIX=${KOPIA_REPO_PREFIX}
+
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        if [ -s /app/config/repository.config ]; then
+          echo "[kopia-init] repository.config exists, skipping init"
+          exit 0
+        fi
+        export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
+        echo "[kopia-init] creating B2 repository ${KOPIA_REPO_BUCKET} prefix=${KOPIA_REPO_PREFIX}"
+        kopia repository create b2 \
+          --bucket="${KOPIA_REPO_BUCKET}" \
+          --prefix="${KOPIA_REPO_PREFIX}" \
+          --key-id="$(cat /run/secrets/b2_account_id)" \
+          --key="$(cat /run/secrets/b2_account_key)"
+        echo "[kopia-init] done"
+
+    volumes:
+      - kopia_config:/app/config
+
+    secrets:
+      - kopia_repo_password
+      - b2_account_id
+      - b2_account_key
+
+  #======================================
+  # KOPIA - Backup engine + web UI (server mode)
+  #======================================
+  kopia:
+    <<: *log_small
+    image: ${KOPIA_IMAGE}
+    hostname: kopia
+    container_name: kopia
+    restart: unless-stopped
+    init: true
+    depends_on:
+      kopia-init:
+        condition: service_completed_successfully
+
+    security_opt:
+      - no-new-privileges=true
+    mem_limit: 1G
+    cpus: 2.0
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+    user: 0:0
+
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        export KOPIA_PASSWORD="$(cat /run/secrets/kopia_repo_password)"
+        export KOPIA_SERVER_PASSWORD="$(cat /run/secrets/kopia_server_password)"
+        export KOPIA_SERVER_CONTROL_PASSWORD="$(cat /run/secrets/kopia_server_password)"
+        exec kopia server start \
+          --insecure \
+          --address=0.0.0.0:51515 \
+          --server-username="${KOPIA_SERVER_USERNAME}" \
+          --server-control-username="${KOPIA_SERVER_USERNAME}" \
+          --metrics-listen-addr=0.0.0.0:51516
+
+    environment:
+      - TZ=${TZ}
+      - KOPIA_SERVER_USERNAME=${KOPIA_SERVER_USERNAME}
+      - KOPIA_CHECK_FOR_UPDATES=false
+      - KOPIA_LOG_DIR=/app/logs
+      - KOPIA_CACHE_DIRECTORY=/app/cache
+      - KOPIA_CONFIG_PATH=/app/config/repository.config
+
+    volumes:
+      - ${LOCALTIME}:/etc/localtime:ro
+      - kopia_config:/app/config
+      - kopia_cache:/app/cache
+      - kopia_logs:/app/logs
+      - ${SPOKE_DIR}/secrets:/sources/secrets:ro
+      - ${SPOKE_DIR}/shared/env:/sources/shared-env:ro
+      - ${SPOKE_DIR}/modules.yml:/sources/modules.yml:ro
+      - ${SPOKE_DIR}/appdata:/sources/appdata:ro
+      - ${BACKUP_STAGING_DIR}:/sources/staging:ro
+      # Add extra source mounts via docker-compose.override.yml, then list
+      # the paths in BACKUP_EXTRA_SOURCES so backup.sh snapshots them.
+
+    tmpfs:
+      - /tmp:rw,size=100m
+      - /run:rw,size=25m
+
+    secrets:
+      - kopia_repo_password
+      - kopia_server_password
+      - b2_account_id
+      - b2_account_key
+
+    networks:
+      troxy:
+        ipv4_address: ${KOPIA_IP}
+
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/51515' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  #======================================
+  # BACKUP_ORCHESTRATOR - cron + pg_dump + Kopia API trigger + email notify
+  #======================================
+  backup-orchestrator:
+    <<: *log_small
+    image: ${BACKUP_ORCHESTRATOR_IMAGE}
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+      args:
+        KOPIA_VERSION: 0.22.3
+    hostname: backup-orchestrator
+    container_name: backup-orchestrator
+    restart: unless-stopped
+    init: true
+    depends_on:
+      kopia:
+        condition: service_healthy
+
+    security_opt:
+      - no-new-privileges=true
+    # Orchestrator runs `kopia snapshot create` locally (hashing buffers +
+    # parallel B2 uploads), not via API — needs same memory class as the
+    # kopia server. 256M was sized for the API-trigger model; OOM-killer
+    # killed mid-snapshot under that limit on multi-GB sources.
+    mem_limit: 4G
+    cpus: 2.0
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_READ_SEARCH
+      - DAC_OVERRIDE
+      # busybox crond invokes initgroups()/setuid()/setgid() to drop to the
+      # job owner before exec; cap_drop ALL strips these and crond fails with
+      # "initgroups failed: root Operation not permitted". Restore the two
+      # caps crond needs even when running every job as root.
+      - SETUID
+      - SETGID
+    user: "0:0"
+
+    environment:
+      - TZ=${TZ}
+      - KOPIA_API_URL=http://kopia:51515
+      - KOPIA_SERVER_USERNAME=${KOPIA_SERVER_USERNAME}
+      - KOPIA_REPO_BUCKET=${KOPIA_REPO_BUCKET}
+      - KOPIA_REPO_ENDPOINT=${KOPIA_REPO_ENDPOINT}
+      - KOPIA_REPO_REGION=${KOPIA_REPO_REGION}
+      - KOPIA_REPO_PREFIX=${KOPIA_REPO_PREFIX}
+      - BACKUP_STAGING_DIR=/staging
+      - BACKUP_RETENTION_DAILY=${BACKUP_RETENTION_DAILY}
+      - BACKUP_RETENTION_WEEKLY=${BACKUP_RETENTION_WEEKLY}
+      - BACKUP_RETENTION_MONTHLY=${BACKUP_RETENTION_MONTHLY}
+      - BACKUP_RETENTION_YEARLY=${BACKUP_RETENTION_YEARLY}
+      - BACKUP_PG_CLUSTERS=${BACKUP_PG_CLUSTERS}
+      - BACKUP_EXTRA_SOURCES=${BACKUP_EXTRA_SOURCES}
+      - BACKUP_PG_DUMP_HOUR=${BACKUP_PG_DUMP_HOUR}
+      - BACKUP_SNAPSHOT_HOUR=${BACKUP_SNAPSHOT_HOUR}
+      - BACKUP_VERIFY_DAY=${BACKUP_VERIFY_DAY}
+      - BACKUP_NOTIFY_TO=${BACKUP_NOTIFY_TO}
+      - BACKUP_NOTIFY_FROM=${BACKUP_NOTIFY_FROM}
+      - BACKUP_NOTIFY_ON=${BACKUP_NOTIFY_ON}
+      - MAIL_RELAY_URL=${MAIL_RELAY_URL}
+      - KOPIA_CHECK_FOR_UPDATES=false
+      - KOPIA_CONFIG_PATH=/app/config/repository.config
+      - KOPIA_LOG_DIR=/app/logs
+      - KOPIA_CACHE_DIRECTORY=/app/cache
+
+    volumes:
+      - ${LOCALTIME}:/etc/localtime:ro
+      - ${BACKUP_STAGING_DIR}:/staging:rw
+      - kopia_config:/app/config
+      - kopia_cache:/app/cache
+      - kopia_logs:/app/logs
+      # Read-only source mounts mirror the kopia container so the orchestrator
+      # can run `kopia snapshot create` against the same paths without going
+      # through the server API (kopia 0.22+ session-cookie auth makes that
+      # impractical from a cron sidecar).
+      - ${SPOKE_DIR}/secrets:/sources/secrets:ro
+      - ${SPOKE_DIR}/shared/env:/sources/shared-env:ro
+      - ${SPOKE_DIR}/modules.yml:/sources/modules.yml:ro
+      - ${SPOKE_DIR}/appdata:/sources/appdata:ro
+      # Add extra source mounts via docker-compose.override.yml, then list
+      # the paths in BACKUP_EXTRA_SOURCES so backup.sh snapshots them.
+
+    tmpfs:
+      - /tmp:rw,size=50m
+      - /run:rw,size=25m
+
+    secrets:
+      - kopia_repo_password
+      - kopia_server_password
+      - b2_account_id
+      - b2_account_key
+      - postgres_hub_backup_password
+      # Add one secret per extra cluster via docker-compose.override.yml.
+      # Naming convention: postgres_<name>_backup_password
+
+    networks:
+      troxy:
+        ipv4_address: ${BACKUP_ORCHESTRATOR_IP}
+      db_backup: {}
