@@ -4,8 +4,8 @@
 # Description: HTTP routing rules for the Kopia backup web UI
 # Author: Matt Barham
 # Created: 2026-04-28
-# Modified: 2026-04-28
-# Version: 1.0.0
+# Modified: 2026-05-08
+# Version: 1.0.1
 # Host: Your Server
 # ==============================================================================
 # Type: Traefik Dynamic Config (routers)
@@ -24,9 +24,9 @@ http:
     #======================================================
 
     kopia:
-      rule: Host(`{{ env "KOPIA_SUBDOMAIN" }}.{{ env "DOMAIN" }}`)
+      rule: Host(`${KOPIA_SUBDOMAIN}.{{ env "DOMAIN" }}`)
       entryPoints: "websecure"
       priority: 100
-      middlewares: chain-admin-strict@file
+      middlewares: chain-no-auth@file
       service: kopia-svc@file
       tls: {}
