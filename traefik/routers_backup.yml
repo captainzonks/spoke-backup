@@ -13,7 +13,7 @@
 # Deployed by Spoke as: mod_backup_routers_backup.yml
 # Dependencies:
 #   - mod_backup_services_backup.yml (service definitions)
-#   - hub middlewares (chain-admin-strict)
+#   - hub middlewares (chain-no-auth) — Kopia handles its own basic auth
 #   - Environment variables: DOMAIN, KOPIA_SUBDOMAIN
 # ==============================================================================
 
