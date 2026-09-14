@@ -7,8 +7,8 @@
 #              an email notification via the spoke-mail-relay module.
 # Author: Matt Barham
 # Created: 2026-04-29
-# Modified: 2026-05-06
-# Version: 1.1.0
+# Modified: 2026-09-14
+# Version: 1.2.0
 # Host: Your Server
 # ==============================================================================
 # Modes:
@@ -58,6 +58,26 @@ err() {
     printf '%s\n' "$line" >> "$RUN_LOG"
 }
 
+# Retries a kopia snapshot create against transient errors (e.g. B2 TLS
+# handshake timeouts) so a single network blip doesn't fail the whole source.
+readonly SNAPSHOT_RETRY_ATTEMPTS=3
+readonly SNAPSHOT_RETRY_DELAY_SECONDS=10
+
+snapshot_with_retry() {
+    local src="$1"
+    local attempt
+    for attempt in $(seq 1 "$SNAPSHOT_RETRY_ATTEMPTS"); do
+        if kopia snapshot create "$src" 2>&1 | tee -a "$RUN_LOG"; then
+            return 0
+        fi
+        if [[ "$attempt" -lt "$SNAPSHOT_RETRY_ATTEMPTS" ]]; then
+            err "snapshot: $src attempt ${attempt}/${SNAPSHOT_RETRY_ATTEMPTS} failed, retrying in ${SNAPSHOT_RETRY_DELAY_SECONDS}s"
+            sleep "$SNAPSHOT_RETRY_DELAY_SECONDS"
+        fi
+    done
+    return 1
+}
+
 run_snapshot() {
     log "starting snapshot run"
 
@@ -79,10 +99,10 @@ run_snapshot() {
     local src
     for src in "${SOURCES[@]}"; do
         log "snapshot: $src"
-        if kopia snapshot create "$src" 2>&1 | tee -a "$RUN_LOG"; then
+        if snapshot_with_retry "$src"; then
             log "snapshot: $src OK"
         else
-            err "snapshot: $src FAILED"
+            err "snapshot: $src FAILED (after ${SNAPSHOT_RETRY_ATTEMPTS} attempts)"
             failures=$((failures + 1))
         fi
     done
