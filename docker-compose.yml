@@ -5,8 +5,8 @@
 #              Postgres dumps and email notifications
 # Author: Matt Barham
 # Created: 2026-04-28
-# Modified: 2026-05-06
-# Version: 1.1.0
+# Modified: 2026-10-02
+# Version: 1.1.1
 # Host: Your Server
 # ==============================================================================
 # Component: module: backup
@@ -230,7 +230,7 @@ services:
       context: ./orchestrator
       dockerfile: Dockerfile
       args:
-        KOPIA_VERSION: 0.22.3
+        KOPIA_VERSION: ${KOPIA_VERSION}
     hostname: backup-orchestrator
     container_name: backup-orchestrator
     restart: unless-stopped

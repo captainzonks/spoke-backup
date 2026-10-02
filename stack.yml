@@ -38,6 +38,7 @@ env:
     - DGID
     - LOCALTIME
   module:
+    - KOPIA_VERSION
     - KOPIA_IMAGE
     - BACKUP_ORCHESTRATOR_IMAGE
     - KOPIA_IP
