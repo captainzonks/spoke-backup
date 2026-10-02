@@ -4,8 +4,8 @@
 # Description: Postgres 18 client + Kopia client + cron + jq + curl, alpine-based
 # Author: Matt Barham
 # Created: 2026-04-29
-# Modified: 2026-04-29
-# Version: 1.0.0
+# Modified: 2026-10-02
+# Version: 1.0.1
 # Host: Your Server
 # ==============================================================================
 # Base: postgres:18-alpine (provides pg_dump 18 — compatible with PG 14-18 servers)
@@ -14,7 +14,7 @@
 #   - PostgreSQL pg_dump compatibility: https://www.postgresql.org/docs/current/app-pgdump.html
 # ==============================================================================
 
-ARG KOPIA_VERSION=0.22.3
+ARG KOPIA_VERSION=0.23.1
 ARG POSTGRES_TAG=18-alpine
 
 FROM postgres:${POSTGRES_TAG}
