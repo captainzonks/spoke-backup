@@ -4,8 +4,8 @@
 # Description: HTTP routing rules for the Kopia backup web UI
 # Author: Matt Barham
 # Created: 2026-04-28
-# Modified: 2026-05-08
-# Version: 1.0.1
+# Modified: 2026-11-26
+# Version: 2.0.0
 # Host: Your Server
 # ==============================================================================
 # Type: Traefik Dynamic Config (routers)
@@ -13,7 +13,9 @@
 # Deployed by Spoke as: mod_backup_routers_backup.yml
 # Dependencies:
 #   - mod_backup_services_backup.yml (service definitions)
-#   - hub middlewares (chain-no-auth) — Kopia handles its own basic auth
+#   - hub v1.3.0 or later (chain-authentik-keep-authorization): Authentik
+#     forward auth first, then Kopia's own basic auth
+#   - an Authentik proxy provider for this host (see README)
 #   - Environment variables: DOMAIN, KOPIA_SUBDOMAIN
 # ==============================================================================
 
@@ -27,6 +29,6 @@ http:
       rule: Host(`${KOPIA_SUBDOMAIN}.{{ env "DOMAIN" }}`)
       entryPoints: "websecure"
       priority: 100
-      middlewares: chain-no-auth@file
+      middlewares: chain-authentik-keep-authorization@file
       service: kopia-svc@file
       tls: {}

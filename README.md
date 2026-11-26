@@ -106,12 +106,13 @@ See [`.env.example`](.env.example).
 4. Add a module entry in `modules.yml` (see your Spoke instance docs) with any `env_overrides` for `BACKUP_PG_CLUSTERS`, `BACKUP_EXTRA_SOURCES`, etc.
 5. (Optional) Drop a `docker-compose.override.yml` next to the module compose file to mount extra source paths, declare extra Postgres secrets, or bind-mount your `appdata-excludes.conf`.
 6. `make deploy MODULE=backup` — first deploy connects to B2 and creates the encrypted repository.
-7. Verify the Kopia UI loads at `https://kopia.<your-domain>` and that the orchestrator container reports `service_healthy`.
-8. Trigger a manual snapshot run:
+7. In Authentik, create a proxy provider (forward auth, single application) for `https://kopia.<your-domain>`, turn **off** "Intercept header authentication" so Kopia's own login reaches it, bind the application to your admin group, and add it to the embedded outpost. Needs Spoke hub v1.3.0 or later. Kopia repository clients cannot connect through this route.
+8. Verify the Kopia UI at `https://kopia.<your-domain>` asks for an Authentik login and then Kopia's, and that the orchestrator container reports `service_healthy`.
+9. Trigger a manual snapshot run:
    ```bash
    docker exec backup-orchestrator /usr/local/bin/backup.sh --once
    ```
-9. Confirm a notification arrives at `BACKUP_NOTIFY_TO`.
+10. Confirm a notification arrives at `BACKUP_NOTIFY_TO`.
 
 ## Backup Sources
 
